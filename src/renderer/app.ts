@@ -125,6 +125,8 @@ const editorTimelineWrapper = document.getElementById('editorTimelineWrapper');
 const editorTimeline = document.getElementById('editorTimeline');
 const editorSectionMarkers = document.getElementById('editorSectionMarkers');
 const editorScrubber = document.getElementById('editorScrubber');
+const editorPlayhead = document.getElementById('editorPlayhead');
+const editorPlayheadRuler = document.getElementById('editorPlayheadRuler');
 const editorCameraTrack = document.getElementById('editorCameraTrack');
 const editorCameraMarkers = document.getElementById('editorCameraMarkers');
 const cameraTrackLabel = document.getElementById('cameraTrackLabel');
@@ -4733,6 +4735,7 @@ function updateScrubberPosition() {
   if (!editorState || editorState.duration <= 0) return;
   const pct = (editorState.currentTime / editorState.duration) * 100;
   editorScrubber.style.left = pct + '%';
+  if (editorPlayhead) editorPlayhead.style.left = pct + '%';
   if (editorState.playing) scrollTimelineToPlayhead();
 }
 
@@ -5110,6 +5113,24 @@ function seekFromTimeline(e) {
   const rect = editorTimeline.getBoundingClientRect();
   const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   editorSeek(pct * editorState.duration);
+}
+
+// Playhead ruler above the tracks: dedicated drag-to-scrub surface that cannot
+// accidentally hit section clips or trim handles.
+if (editorPlayheadRuler) {
+  editorPlayheadRuler.addEventListener('mousedown', (e) => {
+    if (!editorState || editorState.rendering) return;
+    e.preventDefault();
+    e.stopPropagation();
+    seekFromTimeline(e);
+    const onMove = (e2) => seekFromTimeline(e2);
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
 }
 
 const SECTION_DRAG_THRESHOLD = 5;

@@ -380,6 +380,7 @@
         <div class="flex rounded-lg border border-neutral-800 overflow-hidden">
           <!-- Track labels (fixed) -->
           <div class="shrink-0 bg-neutral-950 border-r border-neutral-800/60 select-none">
+            <div class="h-4 border-b border-neutral-800/60"></div>
             <div
               class="h-8 flex items-center px-2.5 text-[10px] font-medium text-neutral-500 uppercase tracking-wider"
             >
@@ -412,6 +413,28 @@
               class="relative cursor-pointer select-none"
               style="min-width: 100%"
             >
+              <!-- Playhead ruler (drag-to-scrub) -->
+              <div
+                id="editorPlayheadRuler"
+                class="relative h-4 bg-neutral-950 border-b border-neutral-800/60 overflow-visible"
+              >
+                <div
+                  id="editorPlayhead"
+                  class="absolute top-0 bottom-0 pointer-events-auto z-30"
+                  style="left: 0%; transform: translateX(-50%); cursor: ew-resize"
+                >
+                  <div
+                    class="absolute left-1/2 top-0 -translate-x-1/2"
+                    style="
+                      width: 0;
+                      height: 0;
+                      border-left: 6px solid transparent;
+                      border-right: 6px solid transparent;
+                      border-top: 8px solid #ffffff;
+                    "
+                  ></div>
+                </div>
+              </div>
               <!-- Screen track -->
               <div id="editorScreenTrack" class="relative h-8 bg-neutral-900 overflow-hidden">
                 <div id="editorSectionMarkers" class="absolute inset-0 z-[1]"></div>
@@ -446,11 +469,11 @@
                   style="opacity: 0.65"
                 ></canvas>
               </div>
-              <!-- Scrubber (spans all tracks) -->
+              <!-- Scrubber (spans all tracks below the playhead ruler) -->
               <div
                 id="editorScrubber"
-                class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20"
-                style="left: 0%"
+                class="absolute bottom-0 w-0.5 bg-white pointer-events-none z-20"
+                style="left: 0%; top: 1rem"
               ></div>
             </div>
           </div>
