@@ -211,6 +211,29 @@ export function normalizeTakeSections(
   return buildDefaultSectionsForDuration(duration);
 }
 
+export function buildRecordingSectionsForTimeline({
+  recordedDuration,
+  activeSegments,
+  autoCutSilences = true,
+  computedSections
+}: {
+  recordedDuration: number;
+  activeSegments: Array<{ start: number; end: number; text?: string }>;
+  autoCutSilences?: boolean;
+  computedSections?: TranscriptSection[] | unknown;
+}): Section[] {
+  const defaultSections = buildDefaultSectionsForDuration(recordedDuration);
+  if (!autoCutSilences) return defaultSections;
+
+  const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
+  const normalizedComputedSections = Array.isArray(computedSections) ? computedSections : [];
+  if (normalizedComputedSections.length > 0) {
+    return attachSectionTranscripts(normalizedComputedSections, fallbackSections) as Section[];
+  }
+
+  return fallbackSections.length > 0 ? fallbackSections : defaultSections;
+}
+
 /**
  * Attaches transcript text to sections by index or source time overlap.
  */

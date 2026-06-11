@@ -17,6 +17,12 @@ describe('scripts/package-smoke-options', () => {
       overwrite: true,
       platform: 'linux',
       arch: 'x64',
+      extendInfo: {
+        NSCameraUsageDescription:
+          'Loop uses the camera to record presenter video alongside your screen.',
+        NSMicrophoneUsageDescription:
+          'Loop uses the microphone to record narration and build transcript-based edits.'
+      },
       prune: false,
       quiet: true
     });

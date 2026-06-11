@@ -9,7 +9,8 @@ import type {
   IpcMain,
   IpcMainInvokeEvent,
   OpenDialogOptions,
-  Shell
+  Shell,
+  SystemPreferences
 } from 'electron';
 
 import type { createProjectService } from '../services/project-service';
@@ -41,6 +42,7 @@ export function registerIpcHandlers({
   dialog,
   desktopCapturer,
   shell,
+  systemPreferences,
   getWindow,
   projectService,
   renderComposite,
@@ -57,6 +59,7 @@ export function registerIpcHandlers({
   dialog: Dialog;
   desktopCapturer: DesktopCapturer;
   shell: Shell;
+  systemPreferences?: Pick<SystemPreferences, 'askForMediaAccess' | 'getMediaAccessStatus'>;
   getWindow: () => BrowserWindow | null;
   projectService: ProjectService;
   renderComposite: RenderComposite;
@@ -78,6 +81,41 @@ export function registerIpcHandlers({
     if (!win || win.isDestroyed()) return false;
     win.setContentProtection(Boolean(enabled));
     return true;
+  });
+
+  ipcMain.handle('request-media-access', async (_event, mediaType: unknown) => {
+    if (mediaType !== 'camera' && mediaType !== 'microphone') {
+      throw new Error('Unsupported media access type');
+    }
+
+    if (process.platform !== 'darwin' || !systemPreferences) {
+      return {
+        mediaType,
+        status: 'granted',
+        granted: true
+      };
+    }
+
+    const initialStatus = systemPreferences.getMediaAccessStatus(mediaType);
+    if (
+      initialStatus === 'granted' ||
+      initialStatus === 'denied' ||
+      initialStatus === 'restricted'
+    ) {
+      return {
+        mediaType,
+        status: initialStatus,
+        granted: initialStatus === 'granted'
+      };
+    }
+
+    const granted = await systemPreferences.askForMediaAccess(mediaType);
+    const status = systemPreferences.getMediaAccessStatus(mediaType);
+    return {
+      mediaType,
+      status,
+      granted
+    };
   });
 
   ipcMain.handle('prepare-display-media', (_event, payload) => {

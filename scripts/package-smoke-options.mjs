@@ -10,6 +10,12 @@ export function createPackagerOptions({
     overwrite: true,
     platform,
     arch,
+    extendInfo: {
+      NSCameraUsageDescription:
+        'Loop uses the camera to record presenter video alongside your screen.',
+      NSMicrophoneUsageDescription:
+        'Loop uses the microphone to record narration and build transcript-based edits.'
+    },
     // electron-packager pruning does not support pnpm's symlinked layout reliably.
     // Keep node_modules intact so packaging smoke verifies packager startup instead
     // of failing on known dependency-walk issues in CI.

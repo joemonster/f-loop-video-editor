@@ -743,6 +743,52 @@ describe('main/services/render-service', () => {
     expect(argString).toContain('[1:v]fps=30,trim=start=2.000:end=3.000,setpts=PTS-STARTPTS[cv2]');
   });
 
+  test('renderComposite uses transparent camera frames for sections without camera media', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-missing-camera-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenA = path.join(tmpDir, 'screen-a.webm');
+    const cameraA = path.join(tmpDir, 'camera-a.webm');
+    const screenB = path.join(tmpDir, 'screen-b.webm');
+    fs.writeFileSync(screenA, 'screen-a', 'utf8');
+    fs.writeFileSync(cameraA, 'camera-a', 'utf8');
+    fs.writeFileSync(screenB, 'screen-b', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          { id: 'take-a', screenPath: screenA, cameraPath: cameraA },
+          { id: 'take-b', screenPath: screenB, cameraPath: null }
+        ],
+        sections: [
+          { takeId: 'take-a', sourceStart: 0, sourceEnd: 1.0 },
+          { takeId: 'take-b', sourceStart: 0, sourceEnd: 1.0 }
+        ],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 334,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('color=color=black@0:s=1920x1080:d=1.000,format=yuva420p[cv1]');
+    expect(argString).toContain("a='alpha(X,Y)*");
+    expect(argString).not.toContain('color=black:s=1920x1080:d=1.000[cv1]');
+  });
+
   test('renderComposite normalizes VFR to CFR once after concat, not per-section', async () => {
     // Per the AGENTS.md learned fact: per-section `fps=N,trim=duration=D`
     // drifts trimmed durations by a few frames over multi-section exports
@@ -1009,9 +1055,7 @@ describe('main/services/render-service', () => {
   });
 
   test('renderComposite keeps camera input for audio even when PiP is not visible', async () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'video-render-audio-camera-hidden-')
-    );
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-audio-camera-hidden-'));
     const outputDir = path.join(tmpDir, 'out');
     const screenPath = path.join(tmpDir, 'screen.webm');
     const cameraPath = path.join(tmpDir, 'camera.webm');

@@ -106,6 +106,15 @@ export interface RecentProjectsEnvelope {
   projects: RecentProjectEntry[];
 }
 
+export type MediaAccessType = 'camera' | 'microphone';
+export type MediaAccessStatus = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
+
+export interface MediaAccessResult {
+  mediaType: MediaAccessType;
+  status: MediaAccessStatus;
+  granted: boolean;
+}
+
 export interface ElectronApi {
   saveVideo: (buffer: ArrayBuffer, folder: string, suffix?: string) => Promise<string>;
   pickFolder: (opts?: { title?: string; buttonLabel?: string }) => Promise<string | null>;
@@ -129,6 +138,7 @@ export interface ElectronApi {
   projectLoadLast: () => Promise<OpenProjectEnvelope | null>;
   projectSetLast: (projectFolder: string) => Promise<boolean>;
   setContentProtection: (enabled: boolean) => Promise<boolean>;
+  requestMediaAccess: (mediaType: MediaAccessType) => Promise<MediaAccessResult>;
   getSources: () => Promise<Array<{ id: string; name: string }>>;
   prepareDisplayMedia: (opts: { sourceId: string | null }) => Promise<boolean>;
   computeSections: (opts: {

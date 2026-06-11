@@ -44,7 +44,14 @@ function createRecordingServiceStub() {
   };
 }
 
-function registerWithHandlers() {
+function registerWithHandlers(
+  opts: {
+    systemPreferences?: {
+      askForMediaAccess: ReturnType<typeof vi.fn>;
+      getMediaAccessStatus: ReturnType<typeof vi.fn>;
+    };
+  } = {}
+) {
   const handlers = new Map<string, (event: unknown, payload: unknown) => unknown>();
   const ipcMain = {
     handle(channel: string, handler: (event: unknown, payload: unknown) => unknown) {
@@ -52,10 +59,7 @@ function registerWithHandlers() {
     }
   };
   const renderComposite = vi.fn(
-    async (
-      _opts: unknown,
-      deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }
-    ) => {
+    async (_opts: unknown, deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }) => {
       deps.onProgress?.({ phase: 'rendering', percent: 0.5, status: 'Rendering 50%' });
       return '/tmp/output.mp4';
     }
@@ -63,10 +67,7 @@ function registerWithHandlers() {
   const proxyService = createProxyServiceStub();
   const recordingService = createRecordingServiceStub();
   const exportPremiereProject = vi.fn(
-    async (
-      _opts: unknown,
-      deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }
-    ) => {
+    async (_opts: unknown, deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }) => {
       deps.onProgress?.({ phase: 'transcoding', percent: 0.5 });
       return {
         outputFolder: '/tmp/export',
@@ -82,6 +83,7 @@ function registerWithHandlers() {
     dialog: { showOpenDialog: vi.fn() },
     desktopCapturer: { getSources: vi.fn() },
     shell: { openPath: vi.fn() },
+    systemPreferences: opts.systemPreferences,
     getWindow: () => null,
     projectService: createProjectServiceStub(),
     renderComposite,
@@ -97,6 +99,40 @@ function registerWithHandlers() {
 }
 
 describe('main/ipc/register-handlers', () => {
+  test('request-media-access returns granted on non-mac platforms', async () => {
+    const { handlers } = registerWithHandlers();
+
+    await expect(handlers.get('request-media-access')!({}, 'camera')).resolves.toEqual({
+      mediaType: 'camera',
+      status: 'granted',
+      granted: true
+    });
+  });
+
+  test('request-media-access asks macOS when permission is not determined', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      const systemPreferences = {
+        askForMediaAccess: vi.fn(async () => true),
+        getMediaAccessStatus: vi
+          .fn()
+          .mockReturnValueOnce('not-determined')
+          .mockReturnValueOnce('granted')
+      };
+      const { handlers } = registerWithHandlers({ systemPreferences });
+
+      await expect(handlers.get('request-media-access')!({}, 'camera')).resolves.toEqual({
+        mediaType: 'camera',
+        status: 'granted',
+        granted: true
+      });
+      expect(systemPreferences.askForMediaAccess).toHaveBeenCalledWith('camera');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    }
+  });
+
   test('render-composite forwards progress updates over IPC', async () => {
     const { handlers, renderComposite } = registerWithHandlers();
 
@@ -207,9 +243,9 @@ describe('main/ipc/register-handlers', () => {
       once: vi.fn(),
       removeListener: vi.fn()
     };
-    await expect(
-      handlers.get('render-composite')!({ sender }, { sections: [] })
-    ).resolves.toBe('/tmp/output.mp4');
+    await expect(handlers.get('render-composite')!({ sender }, { sections: [] })).resolves.toBe(
+      '/tmp/output.mp4'
+    );
   });
 
   test('proxy:generate returns derived proxy path and sends done on success', async () => {
@@ -483,12 +519,10 @@ describe('main/ipc/register-handlers', () => {
       removeListener: vi.fn()
     };
 
-    expect(
-      await handlers.get('recording:recover-orphan')!({ sender }, { takeId: 't' })
-    ).toBeNull();
-    expect(
-      await handlers.get('recording:discard-orphan')!({ sender }, { folder: '/p' })
-    ).toEqual({ discarded: 0 });
+    expect(await handlers.get('recording:recover-orphan')!({ sender }, { takeId: 't' })).toBeNull();
+    expect(await handlers.get('recording:discard-orphan')!({ sender }, { folder: '/p' })).toEqual({
+      discarded: 0
+    });
     expect(await handlers.get('recording:scan-orphans')!({ sender }, '')).toEqual([]);
   });
 });

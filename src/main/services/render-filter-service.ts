@@ -285,10 +285,10 @@ export function buildFilterComplex(
   if (hasPip && hasCamFull) {
     const alphaExpr = buildAlphaExpr(keyframes);
     const roundCornerExpr = `lte(pow(max(0,max(${radius}-X,X-${maxCoord})),2)+pow(max(0,max(${radius}-Y,Y-${maxCoord})),2),${radiusSquared})`;
-    const camPipFilter = `[cam1]setpts=PTS-STARTPTS,crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*${roundCornerExpr}*(${alphaExpr})'[cam]`;
+    const camPipFilter = `[cam1]setpts=PTS-STARTPTS,crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*${roundCornerExpr}*(${alphaExpr})'[cam]`;
 
     const camFullAlpha = buildCamFullAlphaExpr(keyframes);
-    const camFullFilter = `[cam2]setpts=PTS-STARTPTS,scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*(${camFullAlpha})'[camfull]`;
+    const camFullFilter = `[cam2]setpts=PTS-STARTPTS,scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*(${camFullAlpha})'[camfull]`;
 
     const xExpr = buildPosExpr(scaledKeyframes, 'pipX');
     const yExpr = buildPosExpr(scaledKeyframes, 'pipY');
@@ -298,13 +298,13 @@ export function buildFilterComplex(
 
   if (hasCamFull) {
     const camFullAlpha = buildCamFullAlphaExpr(keyframes);
-    const camFullFilter = `[1:v]setpts=PTS-STARTPTS,hflip,scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*(${camFullAlpha})'[camfull]`;
+    const camFullFilter = `[1:v]setpts=PTS-STARTPTS,hflip,scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*(${camFullAlpha})'[camfull]`;
     return `${screenFilter};${camFullFilter};[screen][camfull]overlay=0:0:format=auto[out]`;
   }
 
   const alphaExpr = buildAlphaExpr(keyframes);
   const roundCornerExpr = `lte(pow(max(0,max(${radius}-X,X-${maxCoord})),2)+pow(max(0,max(${radius}-Y,Y-${maxCoord})),2),${radiusSquared})`;
-  const camFilter = `[1:v]setpts=PTS-STARTPTS,hflip,crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*${roundCornerExpr}*(${alphaExpr})'[cam]`;
+  const camFilter = `[1:v]setpts=PTS-STARTPTS,hflip,crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*${roundCornerExpr}*(${alphaExpr})'[cam]`;
 
   const xExpr = buildPosExpr(scaledKeyframes, 'pipX');
   const yExpr = buildPosExpr(scaledKeyframes, 'pipY');

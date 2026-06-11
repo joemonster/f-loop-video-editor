@@ -72,6 +72,9 @@ export interface ProjectSettings {
   // screen video. Sticky per project so toggling during editing does not
   // silently disable system audio on the next recording.
   systemAudioEnabled: boolean;
+  // Whether new recordings should automatically collapse quiet regions into
+  // speech/system-audio sections. Defaults on to preserve legacy behavior.
+  autoCutSilences: boolean;
 }
 
 export type AudioSource = 'screen' | 'camera' | 'external';
@@ -340,7 +343,8 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
       exportVideoPreset: EXPORT_VIDEO_PRESET_QUALITY,
       cameraSyncOffsetMs: 0,
       pipSize: DEFAULT_PIP_SIZE,
-      systemAudioEnabled: false
+      systemAudioEnabled: false,
+      autoCutSilences: true
     },
     takes: [],
     timeline: {
@@ -384,7 +388,8 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
       exportVideoPreset: normalizeExportVideoPreset(rawSettings.exportVideoPreset),
       cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(rawSettings.cameraSyncOffsetMs),
       pipSize: normalizePipSize(rawSettings.pipSize),
-      systemAudioEnabled: rawSettings.systemAudioEnabled === true
+      systemAudioEnabled: rawSettings.systemAudioEnabled === true,
+      autoCutSilences: rawSettings.autoCutSilences !== false
     },
     takes: rawTakes.map((rawTake, index) => {
       const take = isRecord(rawTake) ? (rawTake as PartialTakeInput) : ({} as PartialTakeInput);

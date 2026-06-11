@@ -129,6 +129,7 @@ describe('main/services/render-filter-service', () => {
     expect(filter).toContain('[cam]');
     expect(filter).toContain('overlay');
     expect(filter).toContain('[1:v]setpts=PTS-STARTPTS,hflip,crop=');
+    expect(filter).toContain("a='alpha(X,Y)*");
     expect(filter).toContain("zoompan=z='if(gte(it,2.000),2.000");
     expect(filter).toContain(":x='max(0,min(iw-iw/zoom,iw*(if(gte(it,2.000),0.750000");
   });

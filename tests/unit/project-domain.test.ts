@@ -110,6 +110,30 @@ describe('shared/domain/project', () => {
     expect(project.settings.hideFromRecording).toBe(true);
     expect(project.settings.exportAudioPreset).toBe('compressed');
     expect(project.settings.exportVideoPreset).toBe('quality');
+    expect(project.settings.autoCutSilences).toBe(true);
+  });
+
+  test('normalizeProjectData preserves automatic silence-cutting preference', () => {
+    const disabledProject = normalizeProjectData(
+      {
+        settings: {
+          autoCutSilences: false
+        }
+      },
+      '/tmp/my-project'
+    );
+    const fallbackProject = normalizeProjectData(
+      {
+        settings: {
+          autoCutSilences: 'nope'
+        }
+      },
+      '/tmp/my-project'
+    );
+
+    expect(disabledProject.settings.autoCutSilences).toBe(false);
+    expect(fallbackProject.settings.autoCutSilences).toBe(true);
+    expect(createDefaultProject('Demo').settings.autoCutSilences).toBe(true);
   });
 
   test('normalizeProjectData preserves valid export audio preset and falls back invalid values', () => {

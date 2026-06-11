@@ -776,9 +776,7 @@ export async function renderComposite(
   // ran on VFR input without pre-trim CFR, extends each section's reported
   // duration beyond its declared length and drifts audio against video
   // (that was the "audio drifts later into the export" regression).
-  filterParts.push(
-    `${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`
-  );
+  filterParts.push(`${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`);
   const exportAudioLabel = buildExportAudioLabel(exportAudioPreset);
   if (exportAudioLabel === 'audio_final') {
     filterParts.push(
@@ -803,7 +801,9 @@ export async function renderComposite(
           )
         );
       } else {
-        filterParts.push(`color=black:s=${canvasW}x${canvasH}:d=${duration}[cv${index}]`);
+        filterParts.push(
+          `color=color=black@0:s=${canvasW}x${canvasH}:d=${duration},format=yuva420p[cv${index}]`
+        );
       }
     }
 

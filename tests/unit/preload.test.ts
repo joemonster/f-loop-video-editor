@@ -10,9 +10,7 @@ const { mockContextBridge, mockIpcRenderer, mockWebUtils } = vi.hoisted(() => ({
     removeListener: vi.fn()
   },
   mockWebUtils: {
-    getPathForFile: vi.fn((file: unknown) =>
-      (file as { _mockPath?: string })?._mockPath || ''
-    )
+    getPathForFile: vi.fn((file: unknown) => (file as { _mockPath?: string })?._mockPath || '')
   }
 }));
 
@@ -99,6 +97,11 @@ describe('preload', () => {
   test('getPathForFile returns empty string for missing/invalid files', () => {
     expect(electronAPI.getPathForFile(null as unknown as File)).toBe('');
     expect(electronAPI.getPathForFile({} as unknown as File)).toBe('');
+  });
+
+  test('requestMediaAccess invokes matching IPC channel', () => {
+    electronAPI.requestMediaAccess('camera');
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('request-media-access', 'camera');
   });
 
   test('recording lifecycle methods invoke the matching IPC channels', () => {

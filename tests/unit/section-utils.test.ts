@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   attachSectionTranscripts,
+  buildRecordingSectionsForTimeline,
   buildDefaultSectionsForDuration,
   buildRemappedSectionsFromSegments,
   normalizeSections,
@@ -100,6 +101,51 @@ describe('section-utils', () => {
       const result = normalizeTakeSections(raw, 10);
       expect(result).toHaveLength(1);
       expect(result[0].end).toBe(3);
+    });
+  });
+
+  describe('buildRecordingSectionsForTimeline', () => {
+    test('keeps the full recording when automatic silence cutting is disabled', () => {
+      const result = buildRecordingSectionsForTimeline({
+        recordedDuration: 12,
+        autoCutSilences: false,
+        activeSegments: [
+          { start: 1, end: 2, text: 'hello' },
+          { start: 8, end: 9, text: 'world' }
+        ]
+      });
+
+      expect(result).toEqual(buildDefaultSectionsForDuration(12));
+    });
+
+    test('uses detected segments when automatic silence cutting is enabled', () => {
+      const result = buildRecordingSectionsForTimeline({
+        recordedDuration: 12,
+        autoCutSilences: true,
+        activeSegments: [
+          { start: 1, end: 2, text: 'hello' },
+          { start: 8, end: 9, text: 'world' }
+        ]
+      });
+
+      expect(result).toHaveLength(2);
+      expect(result[0].sourceStart).toBeLessThan(1);
+      expect(result[0].sourceEnd).toBeGreaterThan(2);
+      expect(result[0].transcript).toBe('hello');
+      expect(result[1].transcript).toBe('world');
+    });
+
+    test('attaches transcript text to computed sections', () => {
+      const result = buildRecordingSectionsForTimeline({
+        recordedDuration: 12,
+        activeSegments: [{ start: 1, end: 2, text: 'hello' }],
+        computedSections: [
+          { id: 'computed-1', start: 0, end: 2, sourceStart: 0.85, sourceEnd: 2.15 }
+        ]
+      });
+
+      expect(result[0].id).toBe('computed-1');
+      expect(result[0].transcript).toBe('hello');
     });
   });
 

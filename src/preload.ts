@@ -34,6 +34,7 @@ const electronApi: ElectronApi = {
   projectLoadLast: () => ipcRenderer.invoke('project-load-last'),
   projectSetLast: (projectFolder) => ipcRenderer.invoke('project-set-last', projectFolder),
   setContentProtection: (enabled) => ipcRenderer.invoke('set-content-protection', enabled),
+  requestMediaAccess: (mediaType) => ipcRenderer.invoke('request-media-access', mediaType),
   getSources: () => ipcRenderer.invoke('get-sources'),
   prepareDisplayMedia: (opts) => ipcRenderer.invoke('prepare-display-media', opts),
   computeSections: (opts) => ipcRenderer.invoke('compute-sections', opts),

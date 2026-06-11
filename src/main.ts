@@ -1,6 +1,15 @@
 import 'dotenv/config';
 
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  dialog,
+  ipcMain,
+  session,
+  shell,
+  systemPreferences
+} from 'electron';
 
 import { createWindow } from './main/app/create-window';
 import {
@@ -27,6 +36,7 @@ registerIpcHandlers({
   dialog,
   desktopCapturer,
   shell,
+  systemPreferences,
   getWindow: () => win,
   projectService,
   renderComposite,

@@ -11,6 +11,7 @@ import {
 import {
   roundMs,
   buildRemappedSectionsFromSegments,
+  buildRecordingSectionsForTimeline,
   normalizeSections,
   buildDefaultSectionsForDuration,
   normalizeTakeSections,
@@ -87,6 +88,7 @@ const folderPathEl = document.getElementById('folderPath');
 const openFolderBtn = document.getElementById('openFolderBtn');
 const pickFolderBtn = document.getElementById('pickFolderBtn');
 const contentProtectionToggle = document.getElementById('contentProtectionToggle');
+const keepSilencesToggle = document.getElementById('keepSilencesToggle');
 const recordingView = document.getElementById('recordingView');
 const transcriptPanel = document.getElementById('transcriptPanel');
 const transcriptContent = document.getElementById('transcriptContent');
@@ -906,7 +908,8 @@ function buildProjectSavePayload() {
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
       cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value),
       pipSize: editorState?.pipSize || PIP_SIZE,
-      systemAudioEnabled: !!systemAudioCheckbox?.checked
+      systemAudioEnabled: !!systemAudioCheckbox?.checked,
+      autoCutSilences: keepSilencesToggle?.checked !== true
     },
     timeline: getProjectTimelineSnapshot()
   };
@@ -1333,6 +1336,9 @@ async function activateProject(projectPath, project, preferredView = 'recording'
   hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
   if (systemAudioCheckbox) {
     systemAudioCheckbox.checked = project.settings?.systemAudioEnabled === true;
+  }
+  if (keepSilencesToggle) {
+    keepSilencesToggle.checked = project.settings?.autoCutSilences === false;
   }
   exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
   exportVideoPresetSelect.value = normalizeExportVideoPreset(project.settings?.exportVideoPreset);
@@ -2238,7 +2244,24 @@ function drawCameraRect(targetCtx, video, x, y, w, h, r) {
 }
 
 // Populate device lists
+async function requestLocalMediaAccess() {
+  if (typeof window.electronAPI.requestMediaAccess !== 'function') return;
+
+  for (const mediaType of ['camera', 'microphone']) {
+    try {
+      const result = await window.electronAPI.requestMediaAccess(mediaType);
+      if (!result?.granted) {
+        console.warn(`[Recorder] macOS ${mediaType} permission is ${result?.status || 'unknown'}`);
+      }
+    } catch (error) {
+      console.warn(`[Recorder] Failed to request ${mediaType} permission:`, error);
+    }
+  }
+}
+
 async function enumerateDevices() {
+  await requestLocalMediaAccess();
+
   try {
     const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
     tempStream.getTracks().forEach((t) => t.stop());
@@ -3013,6 +3036,7 @@ async function startRecording() {
   if (systemAudioCheckbox) systemAudioCheckbox.disabled = true;
   cameraSelect.disabled = true;
   audioSelect.disabled = true;
+  if (keepSilencesToggle) keepSilencesToggle.disabled = true;
 
   startTime = Date.now();
   timerInterval = setInterval(updateTimer, 200);
@@ -3962,6 +3986,7 @@ async function stopRecording() {
   if (systemAudioCheckbox) systemAudioCheckbox.disabled = false;
   cameraSelect.disabled = false;
   audioSelect.disabled = false;
+  if (keepSilencesToggle) keepSilencesToggle.disabled = false;
   timerEl.textContent = '00:00';
 
   // Hide transcript panel
@@ -3997,7 +4022,6 @@ async function stopRecording() {
     if (audioSource === 'external' && !audioOnlyPath) audioSource = null;
     pendingRecordingAudioSource = null;
     const audioPath = audioSource === 'external' ? audioOnlyPath : null;
-    let sectionsForTimeline = buildDefaultSectionsForDuration(recordedDuration);
 
     // Compute sections from speech segments (instant, no FFmpeg). If any
     // system audio activity was detected during the take, flush any still-
@@ -4005,11 +4029,16 @@ async function stopRecording() {
     // section builder never trims across audible system sound (e.g. music,
     // screen narration, tutorial demos) just because the mic was quiet.
     closeSystemAudioActivityWindow();
+    const autoCutSilences = keepSilencesToggle?.checked !== true;
     const activeSegments = [
       ...speechSegments.filter((s) => !s.deleted),
       ...systemAudioActivitySegments
     ];
-    const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
+    let sectionsForTimeline = buildRecordingSectionsForTimeline({
+      recordedDuration,
+      activeSegments,
+      autoCutSilences
+    });
     await saveRecoveryTake({
       id: takeId,
       createdAt: takeCreatedAt,
@@ -4022,23 +4051,27 @@ async function stopRecording() {
       sections: sectionsForTimeline,
       trimSegments: activeSegments
     });
-    if (activeSegments.length > 0) {
+    if (autoCutSilences && activeSegments.length > 0) {
       try {
         const computed = await window.electronAPI.computeSections({
           segments: activeSegments
         });
-        sectionsForTimeline =
-          Array.isArray(computed?.sections) && computed.sections.length > 0
-            ? attachSectionTranscripts(computed.sections, fallbackSections)
-            : fallbackSections.length > 0
-              ? fallbackSections
-              : sectionsForTimeline;
+        sectionsForTimeline = buildRecordingSectionsForTimeline({
+          recordedDuration,
+          activeSegments,
+          autoCutSilences,
+          computedSections: computed?.sections
+        });
         if (!matchesActiveProjectSession(projectSession)) return;
       } catch (err) {
         console.warn('Section computation failed, using fallback sections:', err);
-        if (fallbackSections.length > 0) sectionsForTimeline = fallbackSections;
+        sectionsForTimeline = buildRecordingSectionsForTimeline({
+          recordedDuration,
+          activeSegments,
+          autoCutSilences
+        });
       }
-    } else if (hadScribe) {
+    } else if (autoCutSilences && hadScribe) {
       console.warn('No speech detected, using full recording');
     }
 
@@ -4066,8 +4099,9 @@ async function stopRecording() {
       });
     }
 
+    let appendResult;
     try {
-      const appendResult = appendTakeToTimeline({
+      appendResult = appendTakeToTimeline({
         takeId,
         screenPath,
         cameraPath,
@@ -4075,15 +4109,24 @@ async function stopRecording() {
         trimSections: sectionsForTimeline,
         projectSession
       });
-      if (!appendResult || !matchesActiveProjectSession(projectSession)) return;
+    } catch (error) {
+      console.error('Failed to append recording to project timeline:', error);
+      setWorkspaceView('recording');
+      return;
+    }
 
-      if (activeProject && appendResult) {
+    if (!appendResult || !matchesActiveProjectSession(projectSession)) return;
+
+    let projectPersisted = false;
+    if (activeProject && appendResult) {
+      try {
         const take = activeProject.takes.find((t) => t.id === takeId);
         if (take) {
           take.duration = appendResult.takeDuration;
           take.sections = appendResult.takeSections;
         }
         await persistProjectNow();
+        projectPersisted = true;
         // Trigger background proxy generation for the new take. Both the
         // screen and camera proxies are generated so editor playback can
         // hot-swap to the cheaper H.264 decode path as soon as each
@@ -4111,15 +4154,22 @@ async function stopRecording() {
               durationSec: recordedDuration,
               kind: 'camera'
             })
-            .catch((err) =>
-              console.warn('[Proxy] Failed to start camera proxy generation:', err)
-            );
+            .catch((err) => console.warn('[Proxy] Failed to start camera proxy generation:', err));
         }
+      } catch (error) {
+        console.error(
+          'Recording entered the editor, but follow-up project persistence failed:',
+          error
+        );
       }
-      await completeRecoveryTake();
-    } catch (error) {
-      console.error('Failed to append recording to project timeline:', error);
-      setWorkspaceView('recording');
+    }
+
+    if (projectPersisted) {
+      try {
+        await completeRecoveryTake();
+      } catch (error) {
+        console.error('Recording entered the editor, but recovery cleanup failed:', error);
+      }
     }
   } else if (finalizeErrors.length > 0) {
     console.error('Recording finalize failed:', finalizeErrors);
@@ -5727,6 +5777,15 @@ contentProtectionToggle.addEventListener('change', async () => {
   await syncContentProtection();
   scheduleProjectSave();
 });
+
+if (keepSilencesToggle) {
+  keepSilencesToggle.addEventListener('change', () => {
+    if (activeProject?.settings) {
+      activeProject.settings.autoCutSilences = !keepSilencesToggle.checked;
+    }
+    scheduleProjectSave();
+  });
+}
 
 exportAudioPresetSelect.addEventListener('change', () => {
   exportAudioPresetSelect.value = normalizeExportAudioPreset(exportAudioPresetSelect.value);
