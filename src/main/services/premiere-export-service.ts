@@ -6,6 +6,7 @@ import { atomicWriteFileSync, ensureDirectory, fs } from '../infra/file-system';
 import {
   normalizeAudioSource,
   normalizeCameraSyncOffsetMs,
+  toProjectAbsolutePath,
   type AudioSource,
   type Keyframe
 } from '../../shared/domain/project';
@@ -43,6 +44,7 @@ export interface PremiereExportSectionInput {
 
 export interface PremiereExportOptions {
   outputFolder: string;
+  projectFolder?: string;
   projectName: string;
   pipSize: number;
   sourceWidth: number;
@@ -79,6 +81,15 @@ interface TranscodeJob {
   includeCameraAudio?: boolean;
 }
 
+type ResolvedPremiereExportTakeInput = Omit<
+  PremiereExportTakeInput,
+  'screenPath' | 'cameraPath' | 'audioPath'
+> & {
+  screenPath: string | null;
+  cameraPath: string | null;
+  audioPath: string | null;
+};
+
 function sanitizeTakeIdForFileName(takeId: string): string {
   return takeId.replace(/[^a-zA-Z0-9_-]+/g, '_') || 'take';
 }
@@ -95,11 +106,16 @@ function audioOutputName(takeId: string): string {
   return `audio-${sanitizeTakeIdForFileName(takeId)}.wav`;
 }
 
-function roundDownToEven(value: number): number {
-  const rounded = Math.floor(value);
-  if (rounded <= 2) return 2;
-  return rounded % 2 === 0 ? rounded : rounded - 1;
+function resolveExportMediaPath(projectFolder: string | null, value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return projectFolder ? toProjectAbsolutePath(projectFolder, value) : value;
 }
+
+// The Premiere sequence is authored at 1080p to match the editor's fixed
+// 1920x1080 preview/authoring space. Higher-resolution screen media is scaled
+// to cover this frame via a Motion fit scale, preserving full source quality.
+const SEQUENCE_CANVAS_W = 1920;
+const SEQUENCE_CANVAS_H = 1080;
 
 // High-quality (visually lossless) H.264 MP4 is used as the Premiere
 // intermediate: Premiere imports it natively, scrubbing is smooth enough for
@@ -255,15 +271,26 @@ export async function exportPremiereProject(
   const runFfmpegProcess = deps.runFfmpeg || runFfmpeg;
   const ffmpegPath = deps.ffmpegPath ?? ffmpegStatic;
   const onProgress = typeof deps.onProgress === 'function' ? deps.onProgress : null;
+  const projectFolder =
+    typeof opts.projectFolder === 'string' && opts.projectFolder.trim()
+      ? path.resolve(opts.projectFolder)
+      : null;
 
   if (!ffmpegPath) throw new Error('ffmpeg-static is unavailable on this platform');
 
   const mediaFolder = path.join(outputFolder, 'media');
   ensureDirectory(mediaFolder);
 
-  const takeMap = new Map<string, PremiereExportTakeInput>();
+  const takeMap = new Map<string, ResolvedPremiereExportTakeInput>();
   for (const take of opts.takes) {
-    if (take && take.id) takeMap.set(take.id, take);
+    if (take && take.id) {
+      takeMap.set(take.id, {
+        ...take,
+        screenPath: resolveExportMediaPath(projectFolder, take.screenPath),
+        cameraPath: resolveExportMediaPath(projectFolder, take.cameraPath),
+        audioPath: resolveExportMediaPath(projectFolder, take.audioPath)
+      });
+    }
   }
 
   const referencedTakeIds = new Set<string>();
@@ -337,24 +364,14 @@ export async function exportPremiereProject(
     hasCamera
   );
 
-  // Sequence dimensions = native screen resolution (preserves full quality; user
-  // can downscale later if desired). Caller-supplied source dims are a fallback
-  // when probing fails.
-  let canvasW = Math.max(2, Math.round(Number(opts.sourceWidth) || 0));
-  let canvasH = Math.max(2, Math.round(Number(opts.sourceHeight) || 0));
-  if (referencedTakeIds.size > 0) {
-    const firstTakeId = Array.from(referencedTakeIds)[0];
-    const firstTake = takeMap.get(firstTakeId);
-    if (firstTake) {
-      const screenDims = dimsByPath.get(firstTake.screenPath) ?? null;
-      if (screenDims && screenDims.width > 0 && screenDims.height > 0) {
-        canvasW = roundDownToEven(screenDims.width);
-        canvasH = roundDownToEven(screenDims.height);
-      }
-    }
-  }
-  canvasW = Math.max(2, canvasW);
-  canvasH = Math.max(2, canvasH);
+  // Sequence dimensions match the editor's fixed 1920x1080 authoring/preview
+  // space, so the project opens as a 1080p timeline and all PiP/overlay
+  // geometry (authored in 1080p space) maps 1:1 — no resolution scaling math.
+  // The screen media keeps its native resolution (see exportTakes below) and
+  // is scaled to cover this 1080p frame via a Motion fit scale in the XML, so
+  // full source quality is preserved for re-scaling/zooming inside Premiere.
+  const canvasW = SEQUENCE_CANVAS_W;
+  const canvasH = SEQUENCE_CANVAS_H;
 
   onProgress?.({
     phase: 'starting',
@@ -436,6 +453,7 @@ export async function exportPremiereProject(
       (hasCamera || cameraOwnsAudio) && !!take.cameraPath && fs.existsSync(take.cameraPath);
     const durationSec = Number.isFinite(take.duration) ? take.duration : 0;
 
+    if (!take.screenPath) throw new Error(`Screen file not found for take ${takeId}`);
     const screenDims = dimsByPath.get(take.screenPath) ?? null;
     const cameraDims = take.cameraPath ? (dimsByPath.get(take.cameraPath) ?? null) : null;
 

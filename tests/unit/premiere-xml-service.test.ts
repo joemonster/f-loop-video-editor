@@ -9,6 +9,7 @@ import {
   clipLocalKeyframesForSection,
   computeCameraFullScalePercent,
   computeCameraPipScalePercent,
+  computeScreenCoverScalePercent,
   computeSquareCropPercents,
   expandKeyframesWithTransitionHolds,
   TRANSITION_DURATION,
@@ -1075,5 +1076,250 @@ describe('main/services/premiere-xml-service', () => {
     );
     expect(xml).toContain('A &amp; B &lt;Demo&gt;');
     expect(xml).toContain('screen%20%26%20%3C1%3E.mov');
+  });
+
+  test('computeScreenCoverScalePercent fits source to cover the sequence frame', () => {
+    // 3840x2160 screen in 1920x1080 sequence → 50% (both axes match).
+    expect(computeScreenCoverScalePercent(1920, 1080, 3840, 2160)).toBeCloseTo(50, 4);
+    // Native 1920x1080 in 1920x1080 → 100% (no scaling needed).
+    expect(computeScreenCoverScalePercent(1920, 1080, 1920, 1080)).toBeCloseTo(100, 4);
+    // 2560x1440 screen in 1920x1080 → 75%.
+    expect(computeScreenCoverScalePercent(1920, 1080, 2560, 1440)).toBeCloseTo(75, 4);
+    // Non-16:9 (3000x2000) → cover by the larger ratio so the frame is filled.
+    expect(computeScreenCoverScalePercent(1920, 1080, 3000, 2000)).toBeCloseTo(
+      Math.max(1920 / 3000, 1080 / 2000) * 100,
+      4
+    );
+  });
+
+  test('buildPremiereXml scales the 4K screen clip to cover a 1080p sequence', () => {
+    const input = baseInput({
+      hasCamera: false,
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
+          screenDurationSec: 5,
+          cameraDurationSec: 0,
+          screenWidth: 3840,
+          screenHeight: 2160,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ],
+      keyframes: [
+        {
+          time: 0,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        }
+      ]
+    });
+
+    const doc = parseXml(buildPremiereXml(input));
+    const videoTracks = getAllByTag(doc, 'video')[0].getElementsByTagName('track');
+    const screenClip = videoTracks[0].getElementsByTagName('clipitem')[0];
+    const effects = Array.from(screenClip.getElementsByTagName('effect'));
+    const basicMotion = effects.find(
+      (e) => e.getElementsByTagName('effectid')[0]?.textContent === 'basic'
+    );
+    expect(basicMotion).toBeDefined();
+
+    const scale = Array.from(basicMotion!.getElementsByTagName('parameter')).find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'scale'
+    );
+    expect(scale).toBeDefined();
+    // 1920/3840 → 50% cover scale, emitted statically (no zoom/pan animation).
+    expect(Number(scale!.getElementsByTagName('value')[0].textContent)).toBeCloseTo(50, 3);
+    expect(scale!.getElementsByTagName('keyframe')).toHaveLength(0);
+  });
+
+  test('buildPremiereXml composes background zoom on top of the cover scale', () => {
+    const input = baseInput({
+      hasCamera: false,
+      sections: [{ takeId: 'take-1', timelineStart: 0, timelineEnd: 4, sourceStart: 0, sourceEnd: 4 }],
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
+          screenDurationSec: 5,
+          cameraDurationSec: 0,
+          screenWidth: 3840,
+          screenHeight: 2160,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ],
+      keyframes: [
+        {
+          time: 0,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        },
+        {
+          time: 2,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 2,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        }
+      ]
+    });
+
+    const doc = parseXml(buildPremiereXml(input));
+    const videoTracks = getAllByTag(doc, 'video')[0].getElementsByTagName('track');
+    const screenClip = videoTracks[0].getElementsByTagName('clipitem')[0];
+    const basicMotion = Array.from(screenClip.getElementsByTagName('effect')).find(
+      (e) => e.getElementsByTagName('effectid')[0]?.textContent === 'basic'
+    );
+    const scale = Array.from(basicMotion!.getElementsByTagName('parameter')).find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'scale'
+    );
+    const scaleValues = Array.from(scale!.getElementsByTagName('keyframe')).map((kf) =>
+      Number(kf.getElementsByTagName('value')[0]?.textContent)
+    );
+    // coverScale (50) * zoom: 50 at zoom=1, 100 at zoom=2.
+    expect(scaleValues.some((v) => Math.abs(v - 50) < 0.01)).toBe(true);
+    expect(scaleValues.some((v) => Math.abs(v - 100) < 0.01)).toBe(true);
+  });
+
+  test('buildPremiereXml emits a static (non-keyframed) Crop when the PiP never goes fullscreen', () => {
+    // A single steady PiP section should produce a Crop filter the editor can
+    // simply delete to recover the full camera frame — no per-frame keyframes.
+    const input = baseInput({
+      sections: [{ takeId: 'take-1', timelineStart: 0, timelineEnd: 4, sourceStart: 0, sourceEnd: 4 }],
+      keyframes: [
+        {
+          time: 0,
+          pipX: 1478,
+          pipY: 638,
+          pipVisible: true,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        }
+      ]
+    });
+    const doc = parseXml(buildPremiereXml(input));
+    const videoTracks = getAllByTag(doc, 'video')[0].getElementsByTagName('track');
+    const cameraClip = videoTracks[1].getElementsByTagName('clipitem')[0];
+    const cropEffect = Array.from(cameraClip.getElementsByTagName('effect')).find(
+      (e) => e.getElementsByTagName('effectid')[0]?.textContent === 'crop'
+    );
+    expect(cropEffect).toBeDefined();
+    const leftParam = Array.from(cropEffect!.getElementsByTagName('parameter')).find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'left'
+    );
+    expect(leftParam).toBeDefined();
+    // Static value present, but no keyframe children (cleanly removable).
+    expect(Number(leftParam!.getElementsByTagName('value')[0].textContent)).toBeCloseTo(21.875, 3);
+    expect(leftParam!.getElementsByTagName('keyframe')).toHaveLength(0);
+  });
+
+  test('buildPremiereXml emits a stereo 48kHz audio master so added footage is not over-driven', () => {
+    const doc = parseXml(buildPremiereXml(baseInput()));
+    const sequence = doc.getElementsByTagName('sequence')[0];
+    const media = Array.from(sequence.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const audioEl = Array.from(media.childNodes).find(
+      (n) => (n as Element).tagName === 'audio'
+    ) as Element;
+
+    // Master channel count declared as stereo.
+    const numOut = Array.from(audioEl.childNodes).find(
+      (n) => (n as Element).tagName === 'numOutputChannels'
+    ) as Element;
+    expect(numOut?.textContent).toBe('2');
+
+    // Master format: 48kHz / 16-bit.
+    const format = Array.from(audioEl.childNodes).find(
+      (n) => (n as Element).tagName === 'format'
+    ) as Element;
+    expect(format).toBeDefined();
+    const sample = format.getElementsByTagName('samplecharacteristics')[0];
+    expect(sample.getElementsByTagName('samplerate')[0].textContent).toBe('48000');
+    expect(sample.getElementsByTagName('depth')[0].textContent).toBe('16');
+
+    // Stereo output group with two channels.
+    const outputs = Array.from(audioEl.childNodes).find(
+      (n) => (n as Element).tagName === 'outputs'
+    ) as Element;
+    expect(outputs).toBeDefined();
+    const group = outputs.getElementsByTagName('group')[0];
+    expect(group.getElementsByTagName('numchannels')[0].textContent).toBe('2');
+    expect(group.getElementsByTagName('channel')).toHaveLength(2);
+  });
+
+  test('buildPremiereXml emits an audio-only file asset without a video samplecharacteristics block', () => {
+    const input = baseInput({
+      hasCamera: false,
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: '/tmp/proj/media/audio-take-1.wav',
+          audioSource: 'external',
+          hasSystemAudio: false,
+          screenDurationSec: 10,
+          cameraDurationSec: 0,
+          screenWidth: 1920,
+          screenHeight: 1080,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ]
+    });
+    const doc = parseXml(buildPremiereXml(input));
+    const files = getAllByTag(doc, 'file');
+    const audioAsset = files.find(
+      (f) =>
+        f.getAttribute('id') === 'file-audio-take-1' &&
+        f.getElementsByTagName('pathurl').length > 0
+    );
+    expect(audioAsset).toBeDefined();
+    const audioMedia = Array.from(audioAsset!.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    // Audio-only asset must declare audio, not a zero-size video stream.
+    const videoBlocks = Array.from(audioMedia.childNodes).filter(
+      (n) => (n as Element).tagName === 'video'
+    );
+    const audioBlocks = Array.from(audioMedia.childNodes).filter(
+      (n) => (n as Element).tagName === 'audio'
+    );
+    expect(videoBlocks).toHaveLength(0);
+    expect(audioBlocks).toHaveLength(1);
   });
 });

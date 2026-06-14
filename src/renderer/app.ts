@@ -32,6 +32,7 @@ import {
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync';
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
+import { getWaveformDecodeSources } from './features/timeline/waveform-sources';
 import {
   finalizeStreamedRecording,
   getRecorderFinalizeTimeoutMs,
@@ -282,9 +283,7 @@ function handlePremiereExportProgress(update) {
     : null;
   processingTitle.textContent = 'Exporting to Premiere...';
   processingStatus.textContent =
-    typeof update?.status === 'string' && update.status
-      ? update.status
-      : 'Transcoding media...';
+    typeof update?.status === 'string' && update.status ? update.status : 'Transcoding media...';
   setProcessingProgress(percent);
 
   if (percent === null) {
@@ -657,6 +656,11 @@ function cleanupVideoPool() {
   activePlaybackSection = null;
 }
 
+function invalidateTakeWaveformCache(takeId) {
+  takeAudioBufferCache.delete(takeId);
+  takeSystemAudioBufferCache.delete(takeId);
+}
+
 function resolveTimeToSource(timelineTime) {
   const section = findSectionForTime(timelineTime);
   if (!section) return null;
@@ -1025,9 +1029,7 @@ function isPreviewRenderEnabled() {
 
 function buildPreviewInputs() {
   if (!editorState || !activeProject || !activeProjectPath) return null;
-  const referencedTakeIds = new Set(
-    editorState.sections.map((s) => s.takeId).filter(Boolean)
-  );
+  const referencedTakeIds = new Set(editorState.sections.map((s) => s.takeId).filter(Boolean));
   if (referencedTakeIds.size === 0) return null;
   const takes = [];
   const hashTakes = [];
@@ -1424,9 +1426,7 @@ async function activateProject(projectPath, project, preferredView = 'recording'
             durationSec: take.duration || 0,
             kind: 'camera'
           })
-          .catch((err) =>
-            console.warn('[Proxy] Failed to start camera proxy generation:', err)
-          );
+          .catch((err) => console.warn('[Proxy] Failed to start camera proxy generation:', err));
       }
     }
     if (needsMarkerUpdate) renderSectionMarkers();
@@ -1760,6 +1760,13 @@ function refreshWaveform() {
   renderWaveform();
 }
 
+async function rebuildWaveformFromMedia(numBuckets = Math.round(800 * timelineZoom)) {
+  const peaks = await extractWaveformPeaks(numBuckets);
+  if (!editorState) return;
+  waveformPeaks = peaks;
+  renderWaveform();
+}
+
 async function decodeTakeAudioFile(filePath) {
   const url = pathToFileUrl(filePath);
   const response = await fetch(url);
@@ -1778,11 +1785,12 @@ async function extractWaveformPeaks(numBuckets = 800) {
       const take = activeProject?.takes?.find((t) => t.id === section.takeId);
       if (!take) continue;
 
+      const { micPath, systemPath } = getWaveformDecodeSources(take);
+
       if (!takeAudioBufferCache.has(section.takeId)) {
-        const { path: audioFilePath } = resolveTakeAudio(take);
-        if (audioFilePath) {
+        if (micPath) {
           try {
-            const audioBuffer = await decodeTakeAudioFile(audioFilePath);
+            const audioBuffer = await decodeTakeAudioFile(micPath);
             takeAudioBufferCache.set(section.takeId, audioBuffer);
           } catch (err) {
             console.warn(`Failed to decode audio for take ${section.takeId}:`, err);
@@ -1790,16 +1798,9 @@ async function extractWaveformPeaks(numBuckets = 800) {
         }
       }
 
-      // System audio lives on the screen file when hasSystemAudio is true and
-      // the mic is NOT on the screen file (otherwise mic+system share a
-      // single track that's already loaded in the mic cache). Decode it
-      // separately so we can draw both waveforms stacked.
-      const systemAudioOnScreen =
-        take.hasSystemAudio === true &&
-        (take.audioSource === 'camera' || take.audioSource === 'external' || take.audioSource === null);
-      if (systemAudioOnScreen && !takeSystemAudioBufferCache.has(section.takeId) && take.screenPath) {
+      if (systemPath && !takeSystemAudioBufferCache.has(section.takeId)) {
         try {
-          const audioBuffer = await decodeTakeAudioFile(take.screenPath);
+          const audioBuffer = await decodeTakeAudioFile(systemPath);
           takeSystemAudioBufferCache.set(section.takeId, audioBuffer);
         } catch (err) {
           console.warn(`Failed to decode system audio for take ${section.takeId}:`, err);
@@ -2973,7 +2974,10 @@ async function startRecording() {
         // If the camera recorder fails and it was supposed to own the mic,
         // demote the route so the finalized Take still surfaces the mic via
         // the screen file rather than silently dropping it.
-        console.warn('[Recorder] Failed to prepare camera recorder; continuing without camera:', err);
+        console.warn(
+          '[Recorder] Failed to prepare camera recorder; continuing without camera:',
+          err
+        );
         if (audioRoute === 'camera') {
           audioRoute = null;
           pendingRecordingAudioSource = null;
@@ -3467,9 +3471,7 @@ async function recoverOrphansForProject(projectPath) {
                   durationSec: duration,
                   kind: 'screen'
                 })
-                .catch((err) =>
-                  console.warn('[Recovery] Failed to queue proxy generation:', err)
-                );
+                .catch((err) => console.warn('[Recovery] Failed to queue proxy generation:', err));
             }
             if (recovered.cameraPath) {
               window.electronAPI
@@ -4322,11 +4324,7 @@ function enterEditor(rawSections, opts = {}) {
         renderSectionMarkers();
         updateEditorTimeDisplay();
         scheduleProjectSave();
-        extractWaveformPeaks().then((peaks) => {
-          if (!editorState) return;
-          waveformPeaks = peaks;
-          renderWaveform();
-        });
+        rebuildWaveformFromMedia().catch((err) => console.warn('Failed to rebuild waveform:', err));
       };
 
       if (firstTake?.proxyPath && firstTake?.screenPath) {
@@ -5616,6 +5614,7 @@ async function exportPremiere() {
 
     const result = await window.electronAPI.exportPremiereProject({
       outputFolder: targetFolder,
+      projectFolder: activeProjectPath,
       projectName,
       pipSize: editorState.pipSize,
       sourceWidth: editorState.sourceWidth || CANVAS_W,

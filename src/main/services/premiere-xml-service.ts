@@ -257,6 +257,24 @@ export function computeCameraFullScalePercent(
   return cover * 100;
 }
 
+/**
+ * Motion scale (percent) needed for a screen capture to cover the sequence
+ * frame, preserving aspect. The sequence is authored at 1080p while the screen
+ * media keeps its native resolution (e.g. 4K), so the clip is scaled down to
+ * fit: 3840px wide media in a 1920px sequence → 50%. Mirrors the renderer's
+ * `force_original_aspect_ratio=increase,crop` cover behavior.
+ */
+export function computeScreenCoverScalePercent(
+  canvasW: number,
+  canvasH: number,
+  screenWidth: number,
+  screenHeight: number
+): number {
+  if (screenWidth <= 0 || screenHeight <= 0) return 100;
+  const cover = Math.max(canvasW / screenWidth, canvasH / screenHeight);
+  return cover * 100;
+}
+
 export function centerPxToFcpCenter(
   centerPxX: number,
   centerPxY: number,
@@ -342,6 +360,16 @@ function emitCameraFilter(
   const cropTopKfs: string[] = [];
   const cropBottomKfs: string[] = [];
 
+  // Crop only changes when the camera toggles between PiP (square crop) and
+  // fullscreen (no crop). When it stays constant we emit a single static Crop
+  // value with no keyframes so the editor can simply delete the Crop filter to
+  // recover the full, uncropped camera frame.
+  const cropForKf = (kf: ClipLocalKeyframe) =>
+    kf.cameraFullscreen ? { left: 0, right: 0, top: 0, bottom: 0 } : squareCrop;
+  const cropVaries = localKeyframes.some(
+    (kf) => kf.cameraFullscreen !== localKeyframes[0]?.cameraFullscreen
+  );
+
   for (const kf of localKeyframes) {
     const geom = cameraGeomAt(kf, input, cameraWidth, cameraHeight);
     const { horiz, vert } = centerPxToFcpCenter(
@@ -355,15 +383,13 @@ function emitCameraFilter(
     centerKfs.push(centerKeyframeXml(kf.frame, horiz, vert));
     opacityKfs.push(numericKeyframeXml(kf.frame, kf.pipVisible ? 100 : 0));
 
-    // Square-crop while in PiP so the visible region matches the editor's
-    // square PiP footprint; drop crop to 0 when fullscreen so the camera fills.
-    const crop = kf.cameraFullscreen
-      ? { left: 0, right: 0, top: 0, bottom: 0 }
-      : squareCrop;
-    cropLeftKfs.push(numericKeyframeXml(kf.frame, crop.left, 4));
-    cropRightKfs.push(numericKeyframeXml(kf.frame, crop.right, 4));
-    cropTopKfs.push(numericKeyframeXml(kf.frame, crop.top, 4));
-    cropBottomKfs.push(numericKeyframeXml(kf.frame, crop.bottom, 4));
+    if (cropVaries) {
+      const crop = cropForKf(kf);
+      cropLeftKfs.push(numericKeyframeXml(kf.frame, crop.left, 4));
+      cropRightKfs.push(numericKeyframeXml(kf.frame, crop.right, 4));
+      cropTopKfs.push(numericKeyframeXml(kf.frame, crop.top, 4));
+      cropBottomKfs.push(numericKeyframeXml(kf.frame, crop.bottom, 4));
+    }
   }
 
   const first = localKeyframes[0];
@@ -377,7 +403,7 @@ function emitCameraFilter(
     canvasH
   );
   const firstOpacity = first ? (first.pipVisible ? 100 : 0) : 100;
-  const firstCrop = first && !first.cameraFullscreen ? squareCrop : squareCrop;
+  const firstCrop = first ? cropForKf(first) : squareCrop;
 
   const basicMotion =
     `      <effect>\n` +
@@ -480,7 +506,10 @@ function emitCameraFilter(
   );
 }
 
-function emitScreenFilter(localKeyframes: ClipLocalKeyframe[]): string | null {
+function emitScreenFilter(
+  localKeyframes: ClipLocalKeyframe[],
+  coverScale: number
+): string | null {
   const hasChange = localKeyframes.some((kf) => {
     return (
       Math.abs((kf.backgroundZoom ?? 1) - 1) > 0.0001 ||
@@ -488,35 +517,42 @@ function emitScreenFilter(localKeyframes: ClipLocalKeyframe[]): string | null {
       Math.abs(kf.backgroundPanY ?? 0) > 0.0001
     );
   });
-  if (!hasChange) return null;
+  // When the media already matches the sequence resolution (coverScale ~100)
+  // and there is no zoom/pan animation, the clip needs no Motion at all.
+  if (!hasChange && Math.abs(coverScale - 100) < 0.01) return null;
 
   const scaleKfs: string[] = [];
   const centerKfs: string[] = [];
 
-  for (const kf of localKeyframes) {
-    const zoomPct = Math.max(1, kf.backgroundZoom ?? 1) * 100;
-    const horiz = kf.backgroundPanX ?? 0;
-    const vert = kf.backgroundPanY ?? 0;
+  // The cover scale fits the (potentially higher-res) screen capture into the
+  // 1080p sequence; background zoom multiplies it on top so a 2x zoom on a 4K
+  // source in a 1080p sequence reads as 100% (50% cover * 2).
+  if (hasChange) {
+    for (const kf of localKeyframes) {
+      const zoomPct = coverScale * Math.max(1, kf.backgroundZoom ?? 1);
+      const horiz = kf.backgroundPanX ?? 0;
+      const vert = kf.backgroundPanY ?? 0;
 
-    scaleKfs.push(
-      `          <keyframe>\n` +
-        `            <when>${kf.frame}</when>\n` +
-        `            <value>${zoomPct.toFixed(3)}</value>\n` +
-        `          </keyframe>`
-    );
-    centerKfs.push(
-      `          <keyframe>\n` +
-        `            <when>${kf.frame}</when>\n` +
-        `            <value>\n` +
-        `              <horiz>${horiz.toFixed(6)}</horiz>\n` +
-        `              <vert>${vert.toFixed(6)}</vert>\n` +
-        `            </value>\n` +
-        `          </keyframe>`
-    );
+      scaleKfs.push(
+        `          <keyframe>\n` +
+          `            <when>${kf.frame}</when>\n` +
+          `            <value>${zoomPct.toFixed(3)}</value>\n` +
+          `          </keyframe>`
+      );
+      centerKfs.push(
+        `          <keyframe>\n` +
+          `            <when>${kf.frame}</when>\n` +
+          `            <value>\n` +
+          `              <horiz>${horiz.toFixed(6)}</horiz>\n` +
+          `              <vert>${vert.toFixed(6)}</vert>\n` +
+          `            </value>\n` +
+          `          </keyframe>`
+      );
+    }
   }
 
   const first = localKeyframes[0];
-  const firstScale = first ? Math.max(1, first.backgroundZoom ?? 1) * 100 : 100;
+  const firstScale = coverScale * (first ? Math.max(1, first.backgroundZoom ?? 1) : 1);
   const firstHoriz = first ? first.backgroundPanX ?? 0 : 0;
   const firstVert = first ? first.backgroundPanY ?? 0 : 0;
 
@@ -581,6 +617,23 @@ function emitFileAsset(info: FileAssetInfo, fps: number, emitted: Set<string>): 
       `            <channelcount>2</channelcount>\n` +
       `          </audio>\n`
     : '';
+  // Audio-only assets (width/height of 0, e.g. the dedicated mic WAV) must not
+  // declare a zero-size video stream — Premiere can mis-conform such a file and
+  // drive the imported audio hot. Emit only the audio characteristics instead.
+  const isAudioOnly = info.width <= 0 || info.height <= 0;
+  const videoBlock = isAudioOnly
+    ? ''
+    : `          <video>\n` +
+      `            <samplecharacteristics>\n` +
+      `              <rate>\n` +
+      `                <timebase>${fps}</timebase>\n` +
+      `                <ntsc>FALSE</ntsc>\n` +
+      `              </rate>\n` +
+      `              <width>${info.width}</width>\n` +
+      `              <height>${info.height}</height>\n` +
+      `              <pixelaspectratio>square</pixelaspectratio>\n` +
+      `            </samplecharacteristics>\n` +
+      `          </video>\n`;
   return (
     `      <file id="${info.id}">\n` +
     `        <name>${escapeXml(info.name)}</name>\n` +
@@ -591,17 +644,7 @@ function emitFileAsset(info: FileAssetInfo, fps: number, emitted: Set<string>): 
     `        </rate>\n` +
     `        <duration>${info.durationFrames}</duration>\n` +
     `        <media>\n` +
-    `          <video>\n` +
-    `            <samplecharacteristics>\n` +
-    `              <rate>\n` +
-    `                <timebase>${fps}</timebase>\n` +
-    `                <ntsc>FALSE</ntsc>\n` +
-    `              </rate>\n` +
-    `              <width>${info.width}</width>\n` +
-    `              <height>${info.height}</height>\n` +
-    `              <pixelaspectratio>square</pixelaspectratio>\n` +
-    `            </samplecharacteristics>\n` +
-    `          </video>\n` +
+    videoBlock +
     audioBlock +
     `        </media>\n` +
     `      </file>`
@@ -647,7 +690,13 @@ function emitScreenClip(params: {
   );
 
   const localKfs = clipLocalKeyframesForSection(input.keyframes, section, fps);
-  const screenFilter = emitScreenFilter(localKfs);
+  const coverScale = computeScreenCoverScalePercent(
+    input.canvasW,
+    input.canvasH,
+    take.screenWidth,
+    take.screenHeight
+  );
+  const screenFilter = emitScreenFilter(localKfs, coverScale);
 
   return (
     `  <clipitem id="clipitem-screen-${clipIndex}">\n` +
@@ -975,6 +1024,33 @@ export function buildPremiereXml(input: PremiereXmlInput): string {
   }
   const audioTrack = audioTracks.join('\n');
 
+  // Declare an explicit stereo / 48kHz / 16-bit audio master with a 2-channel
+  // output group. Without this, Premiere guesses the sequence's audio master
+  // when importing the xmeml and can default to a mono/odd configuration; any
+  // footage the editor later drops into the sequence then gets summed/boosted
+  // and clips even though the source files are clean.
+  const audioMaster =
+    `        <numOutputChannels>2</numOutputChannels>\n` +
+    `        <format>\n` +
+    `          <samplecharacteristics>\n` +
+    `            <depth>16</depth>\n` +
+    `            <samplerate>48000</samplerate>\n` +
+    `          </samplecharacteristics>\n` +
+    `        </format>\n` +
+    `        <outputs>\n` +
+    `          <group>\n` +
+    `            <index>1</index>\n` +
+    `            <numchannels>2</numchannels>\n` +
+    `            <downmix>0</downmix>\n` +
+    `            <channel>\n` +
+    `              <index>1</index>\n` +
+    `            </channel>\n` +
+    `            <channel>\n` +
+    `              <index>2</index>\n` +
+    `            </channel>\n` +
+    `          </group>\n` +
+    `        </outputs>`;
+
   const sequenceName = escapeXml(input.projectName || 'Loop Sequence');
   const sequenceId = `sequence-1`;
 
@@ -1007,6 +1083,7 @@ export function buildPremiereXml(input: PremiereXmlInput): string {
     `${videoTracks.join('\n')}\n` +
     `      </video>\n` +
     `      <audio>\n` +
+    `${audioMaster}\n` +
     `${audioTrack}\n` +
     `      </audio>\n` +
     `    </media>\n` +

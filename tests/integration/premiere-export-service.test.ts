@@ -152,12 +152,28 @@ describe('main/services/premiere-export-service', () => {
     expect(xml).toContain('My Project');
     expect(xml).toContain('screen-take-1.mp4');
     expect(xml).toContain('camera-take-1.mp4');
-    // Sequence adopts the probed native screen dimensions (3840x2160), not a cap.
+
+    // Sequence is authored at 1080p (matches the editor's 1920x1080 preview
+    // space) regardless of the 3840x2160 screen capture, so PiP/overlay
+    // geometry maps 1:1 and the project opens as a 1080p timeline. The
+    // sequence dimensions live in the only <format> block in the document
+    // (file assets declare bare <samplecharacteristics> with no <format>).
+    const seqFormatMatch = xml.match(
+      /<format>\s*<samplecharacteristics>[\s\S]*?<width>(\d+)<\/width>\s*<height>(\d+)<\/height>/
+    );
+    expect(seqFormatMatch).not.toBeNull();
+    expect(seqFormatMatch![1]).toBe('1920');
+    expect(seqFormatMatch![2]).toBe('1080');
+
+    // The screen media is preserved at its native 3840x2160 resolution (full
+    // quality) and scaled to cover the 1080p sequence via Motion.
     expect(xml).toContain('<width>3840</width>');
     expect(xml).toContain('<height>2160</height>');
-    // Camera asset recorded at native 1920x1080 (not square).
-    expect(xml).toContain('<width>1920</width>');
-    expect(xml).toContain('<height>1080</height>');
+
+    // Screen clip carries a Basic Motion fit scale of 50% (1920/3840) so the
+    // 4K capture fills the 1080p frame.
+    expect(xml).toMatch(/<parameterid>scale<\/parameterid>\s*<name>Scale<\/name>[\s\S]*?<value>50\.000<\/value>/);
+
     expect(result.xmlPath).toBe(xmlPath);
     expect(result.outputFolder).toBe(opts.outputFolder);
   });
@@ -193,6 +209,65 @@ describe('main/services/premiere-export-service', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].args.join(' ')).toContain('screen-take-1.mp4');
+  });
+
+  test('exportPremiereProject resolves project-relative media paths from the project folder', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-relative-'));
+    const calls: FfmpegCall[] = [];
+    fs.writeFileSync(path.join(tmpDir, 'screen-a.webm'), 'screen-a', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'camera-a.webm'), 'camera-a', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'screen-b.webm'), 'screen-b', 'utf8');
+    const opts = makeBaseOpts(tmpDir, {
+      projectFolder: tmpDir,
+      takes: [
+        {
+          id: 'take-a',
+          screenPath: 'screen-a.webm',
+          cameraPath: 'camera-a.webm',
+          audioSource: 'camera',
+          duration: 10
+        },
+        {
+          id: 'take-b',
+          screenPath: 'screen-b.webm',
+          cameraPath: null,
+          audioSource: null,
+          duration: 12
+        }
+      ],
+      sections: [
+        { takeId: 'take-a', timelineStart: 0, timelineEnd: 4, sourceStart: 0, sourceEnd: 4 },
+        { takeId: 'take-b', timelineStart: 4, timelineEnd: 8, sourceStart: 1, sourceEnd: 5 }
+      ],
+      keyframes: [
+        baseKeyframe({ time: 0, pipVisible: true }),
+        baseKeyframe({ time: 4, pipVisible: true })
+      ]
+    });
+
+    await exportPremiereProject(opts, {
+      ffmpegPath: '/usr/bin/ffmpeg',
+      probeVideoFpsWithFfmpeg: async () => 30,
+      probeVideoDimensionsWithFfmpeg: async () => ({ width: 1920, height: 1080 }),
+      runFfmpeg: createRunFfmpegStub(calls, (call) => {
+        const outPath = call.args[call.args.length - 1];
+        if (outPath && outPath.endsWith('.mp4')) {
+          fs.mkdirSync(path.dirname(outPath), { recursive: true });
+          fs.writeFileSync(outPath, 'mp4-data', 'utf8');
+        }
+      })
+    });
+
+    const joinedCalls = calls.map((call) => call.args.join(' '));
+    expect(calls).toHaveLength(3);
+    expect(joinedCalls).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(path.join(tmpDir, 'screen-a.webm')),
+        expect.stringContaining(path.join(tmpDir, 'camera-a.webm')),
+        expect.stringContaining(path.join(tmpDir, 'screen-b.webm'))
+      ])
+    );
+    expect(joinedCalls.some((call) => call.includes('camera-take-b.mp4'))).toBe(false);
   });
 
   test('exportPremiereProject emits progress updates across transcodes', async () => {
